@@ -1,6 +1,14 @@
 import streamlit as st
-from transformers import pipeline
 import torch
+import numpy as np
+
+# Try to import transformers with error handling
+try:
+    from transformers import pipeline
+    TRANSFORMERS_AVAILABLE = True
+except ImportError as e:
+    st.error(f"Error importing transformers: {e}")
+    TRANSFORMERS_AVAILABLE = False
 
 # Page config
 st.set_page_config(
@@ -16,6 +24,9 @@ st.markdown("*Classify news articles into World, Sports, Business, or Science & 
 @st.cache_resource
 def load_classifier():
     """Load a simple text classification pipeline"""
+    if not TRANSFORMERS_AVAILABLE:
+        return None
+        
     try:
         # Use a lightweight model that works well for text classification
         classifier = pipeline(
@@ -27,11 +38,18 @@ def load_classifier():
         st.error(f"Error loading model: {e}")
         return None
 
+# Check if transformers is available
+if not TRANSFORMERS_AVAILABLE:
+    st.error("❌ Transformers library is not properly installed. Please check the deployment logs.")
+    st.info("💡 This might be a temporary issue. Try refreshing the page in a few minutes.")
+    st.stop()
+
 # Load classifier
 classifier = load_classifier()
 
 if classifier is None:
     st.error("❌ Failed to load the classification model. Please try refreshing the page.")
+    st.info("💡 The model might be downloading. This can take a few minutes on first load.")
     st.stop()
 
 # Sample articles for quick testing
@@ -100,6 +118,7 @@ if st.button("🔍 Classify Article", type="primary"):
         except Exception as e:
             st.error(f"❌ Error during classification: {str(e)}")
             st.info("💡 Try with a shorter text or check your internet connection")
+            st.info("🔧 If this persists, the model might still be loading. Please wait a moment and try again.")
     else:
         st.warning("⚠️ Please enter some text to classify!")
 
