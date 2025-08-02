@@ -1,8 +1,6 @@
 import streamlit as st
-from transformers import BertTokenizer, BertForSequenceClassification, pipeline
+from transformers import pipeline
 import torch
-import os
-import glob
 
 # Page config
 st.set_page_config(
@@ -16,36 +14,25 @@ st.markdown("*Classify news articles into World, Sports, Business, or Science & 
 
 # Cache the model loading for better performance
 @st.cache_resource
-def load_model():
-    """Load the classification model with caching for better performance"""
+def load_classifier():
+    """Load a simple text classification pipeline"""
     try:
-        # Check for available checkpoints first
-        checkpoint_dirs = glob.glob("./results/checkpoint-*")
-        if checkpoint_dirs:
-            latest_checkpoint = max(checkpoint_dirs, key=os.path.getctime)
-            st.info(f"✅ Using fine-tuned model: {latest_checkpoint}")
-            tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
-            model = BertForSequenceClassification.from_pretrained(latest_checkpoint)
-            return tokenizer, model, "fine-tuned"
-        else:
-            # Use a pre-trained model that works better for text classification
-            st.info("📝 Using pre-trained BERT model (not specifically fine-tuned for news)")
-            # Use a pipeline for better out-of-box performance
-            classifier = pipeline(
-                "text-classification",
-                model="cardiffnlp/twitter-roberta-base-sentiment-latest",
-                return_all_scores=True
-            )
-            return None, classifier, "pipeline"
+        # Use a lightweight model that works well for text classification
+        classifier = pipeline(
+            "zero-shot-classification",
+            model="facebook/bart-large-mnli"
+        )
+        return classifier
     except Exception as e:
         st.error(f"Error loading model: {e}")
-        # Fallback to basic BERT
-        tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
-        model = BertForSequenceClassification.from_pretrained("bert-base-uncased", num_labels=4)
-        return tokenizer, model, "basic"
+        return None
 
-# Load model
-tokenizer, model, model_type = load_model()
+# Load classifier
+classifier = load_classifier()
+
+if classifier is None:
+    st.error("❌ Failed to load the classification model. Please try refreshing the page.")
+    st.stop()
 
 # Sample articles for quick testing
 sample_articles = {
@@ -81,60 +68,34 @@ if st.button("🔍 Classify Article", type="primary"):
     if text.strip():
         try:
             with st.spinner("🤖 Analyzing article..."):
-                labels = ["World", "Sports", "Business", "Sci/Tech"]
+                # Define the news categories
+                candidate_labels = ["World News", "Sports", "Business", "Science and Technology"]
                 
-                if model_type == "fine-tuned":
-                    # Use fine-tuned model
-                    inputs = tokenizer(text, return_tensors="pt", truncation=True, padding=True, max_length=128)
-                    with torch.no_grad():
-                        outputs = model(**inputs)
-                    probs = torch.nn.functional.softmax(outputs.logits, dim=1)
-                    pred = torch.argmax(probs).item()
-                    confidence = probs[0][pred].item()
-                    
-                    st.success(f"**🎯 Predicted Category:** {labels[pred]}")
-                    st.info(f"**📊 Confidence:** {confidence:.2%}")
-                    
-                    # Show all probabilities
-                    st.subheader("📈 All Category Probabilities:")
-                    for i, (label, prob) in enumerate(zip(labels, probs[0])):
-                        st.write(f"**{label}:** {prob.item():.2%}")
-                        
-                elif model_type == "pipeline":
-                    # Use pipeline model (fallback)
-                    results = model(text)
-                    st.warning("⚠️ Using general sentiment model - results are approximate")
-                    
-                    # Map sentiment to news categories (rough approximation)
-                    sentiment_to_category = {
-                        "LABEL_0": "World",  # Negative -> World news
-                        "LABEL_1": "Business",  # Neutral -> Business
-                        "LABEL_2": "Sports"  # Positive -> Sports
-                    }
-                    
-                    best_result = max(results, key=lambda x: x['score'])
-                    predicted_category = sentiment_to_category.get(best_result['label'], "Sci/Tech")
-                    
-                    st.success(f"**🎯 Predicted Category:** {predicted_category}")
-                    st.info(f"**📊 Confidence:** {best_result['score']:.2%}")
-                    
-                else:
-                    # Use basic BERT model
-                    st.warning("⚠️ Using basic BERT model - results may not be accurate for news classification!")
-                    inputs = tokenizer(text, return_tensors="pt", truncation=True, padding=True, max_length=128)
-                    with torch.no_grad():
-                        outputs = model(**inputs)
-                    probs = torch.nn.functional.softmax(outputs.logits, dim=1)
-                    pred = torch.argmax(probs).item()
-                    confidence = probs[0][pred].item()
-                    
-                    st.success(f"**🎯 Predicted Category:** {labels[pred]}")
-                    st.info(f"**📊 Confidence:** {confidence:.2%}")
-                    
-                    # Show all probabilities
-                    st.subheader("📈 All Category Probabilities:")
-                    for i, (label, prob) in enumerate(zip(labels, probs[0])):
-                        st.write(f"**{label}:** {prob.item():.2%}")
+                # Classify the text
+                result = classifier(text, candidate_labels)
+                
+                # Get the results
+                predicted_label = result['labels'][0]
+                confidence = result['scores'][0]
+                
+                # Map to simpler labels
+                label_mapping = {
+                    "World News": "World",
+                    "Sports": "Sports", 
+                    "Business": "Business",
+                    "Science and Technology": "Sci/Tech"
+                }
+                
+                predicted_category = label_mapping.get(predicted_label, predicted_label)
+                
+                st.success(f"**🎯 Predicted Category:** {predicted_category}")
+                st.info(f"**📊 Confidence:** {confidence:.2%}")
+                
+                # Show all probabilities
+                st.subheader("📈 All Category Probabilities:")
+                for label, score in zip(result['labels'], result['scores']):
+                    mapped_label = label_mapping.get(label, label)
+                    st.write(f"**{mapped_label}:** {score:.2%}")
                     
         except Exception as e:
             st.error(f"❌ Error during classification: {str(e)}")
