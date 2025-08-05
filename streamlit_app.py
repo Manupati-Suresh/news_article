@@ -4,6 +4,14 @@ import time
 import re
 from collections import Counter
 
+# Essential imports
+try:
+    import torch
+    TORCH_AVAILABLE = True
+except ImportError:
+    TORCH_AVAILABLE = False
+    st.error("PyTorch is required but not available")
+
 # Optional imports with fallbacks
 try:
     import pandas as pd
@@ -24,6 +32,11 @@ try:
 except ImportError as e:
     st.error(f"Error importing transformers: {e}")
     TRANSFORMERS_AVAILABLE = False
+    st.stop()
+
+# Check if all required libraries are available
+if not TORCH_AVAILABLE:
+    st.error("❌ PyTorch is required but not available. Please check the deployment.")
     st.stop()
 
 # Page config
