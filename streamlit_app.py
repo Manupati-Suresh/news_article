@@ -1,15 +1,21 @@
 import streamlit as st
-import torch
 import numpy as np
-import pandas as pd
-import plotly.express as px
-import plotly.graph_objects as go
-from datetime import datetime, timedelta
-import json
 import time
 import re
 from collections import Counter
-import base64
+
+# Optional imports with fallbacks
+try:
+    import pandas as pd
+    PANDAS_AVAILABLE = True
+except ImportError:
+    PANDAS_AVAILABLE = False
+
+try:
+    import plotly.express as px
+    PLOTLY_AVAILABLE = True
+except ImportError:
+    PLOTLY_AVAILABLE = False
 
 # Try to import transformers with error handling
 try:
@@ -18,6 +24,7 @@ try:
 except ImportError as e:
     st.error(f"Error importing transformers: {e}")
     TRANSFORMERS_AVAILABLE = False
+    st.stop()
 
 # Page config
 st.set_page_config(
@@ -96,9 +103,9 @@ if 'model_loaded' not in st.session_state:
 # Cache the model loading for better performance
 @st.cache_resource
 def load_classifier():
-    """Load multiple classification models for better accuracy"""
+    """Load classification model"""
     if not TRANSFORMERS_AVAILABLE:
-        return None, None
+        return None
         
     try:
         # Primary classifier for news categorization
@@ -107,16 +114,10 @@ def load_classifier():
             model="facebook/bart-large-mnli"
         )
         
-        # Secondary classifier for sentiment analysis
-        sentiment_classifier = pipeline(
-            "sentiment-analysis",
-            model="cardiffnlp/twitter-roberta-base-sentiment-latest"
-        )
-        
-        return news_classifier, sentiment_classifier
+        return news_classifier
     except Exception as e:
-        st.error(f"Error loading models: {e}")
-        return None, None
+        st.error(f"Error loading model: {e}")
+        return None
 
 # Utility functions
 def extract_keywords(text, top_k=5):
@@ -158,27 +159,22 @@ if not TRANSFORMERS_AVAILABLE:
     st.info("💡 This might be a temporary issue. Try refreshing the page in a few minutes.")
     st.stop()
 
-# Load classifiers with progress bar
+# Load classifier with progress bar
 if not st.session_state.model_loaded:
-    with st.spinner("🚀 Loading AI models... This may take a few minutes on first load."):
-        progress_bar = st.progress(0)
-        progress_bar.progress(25)
-        
-        news_classifier, sentiment_classifier = load_classifier()
-        progress_bar.progress(75)
+    with st.spinner("🚀 Loading AI model... This may take a few minutes on first load."):
+        news_classifier = load_classifier()
         
         if news_classifier is None:
-            st.error("❌ Failed to load the classification models. Please try refreshing the page.")
-            st.info("💡 The models might be downloading. This can take a few minutes on first load.")
+            st.error("❌ Failed to load the classification model. Please try refreshing the page.")
+            st.info("💡 The model might be downloading. This can take a few minutes on first load.")
             st.stop()
         
-        progress_bar.progress(100)
         st.session_state.model_loaded = True
-        st.success("✅ AI models loaded successfully!")
+        st.success("✅ AI model loaded successfully!")
         time.sleep(1)
         st.rerun()
 else:
-    news_classifier, sentiment_classifier = load_classifier()
+    news_classifier = load_classifier()
 
 # Sidebar for settings and analytics
 with st.sidebar:
@@ -188,45 +184,44 @@ with st.sidebar:
     st.subheader("⚙️ Model Settings")
     confidence_threshold = st.slider("Confidence Threshold", 0.0, 1.0, 0.5, 0.05)
     show_all_scores = st.checkbox("Show All Category Scores", True)
-    enable_sentiment = st.checkbox("Enable Sentiment Analysis", True)
     enable_analytics = st.checkbox("Enable Text Analytics", True)
     
     # Analytics dashboard
     st.subheader("📊 Analytics Dashboard")
     st.metric("Total Classifications", st.session_state.total_classifications)
     
-    if st.session_state.classification_history:
+    if st.session_state.classification_history and PLOTLY_AVAILABLE:
         # Category distribution
         categories = [item['category'] for item in st.session_state.classification_history]
         category_counts = Counter(categories)
         
-        fig = px.pie(
-            values=list(category_counts.values()),
-            names=list(category_counts.keys()),
-            title="Category Distribution"
-        )
-        fig.update_layout(height=300)
-        st.plotly_chart(fig, use_container_width=True)
-        
-        # Average confidence over time
-        confidences = [item['confidence'] for item in st.session_state.classification_history[-10:]]
-        fig2 = px.line(
-            x=range(len(confidences)),
-            y=confidences,
-            title="Recent Confidence Scores",
-            labels={'x': 'Classification #', 'y': 'Confidence'}
-        )
-        fig2.update_layout(height=250)
-        st.plotly_chart(fig2, use_container_width=True)
+        try:
+            fig = px.pie(
+                values=list(category_counts.values()),
+                names=list(category_counts.keys()),
+                title="Category Distribution"
+            )
+            fig.update_layout(height=300)
+            st.plotly_chart(fig, use_container_width=True)
+        except Exception as e:
+            st.write("📊 Category Distribution:")
+            for cat, count in category_counts.items():
+                st.write(f"- {cat}: {count}")
     
     # Export data
-    if st.session_state.classification_history:
+    if st.session_state.classification_history and PANDAS_AVAILABLE:
         if st.button("📥 Export History"):
-            df = pd.DataFrame(st.session_state.classification_history)
-            csv = df.to_csv(index=False)
-            b64 = base64.b64encode(csv.encode()).decode()
-            href = f'<a href="data:file/csv;base64,{b64}" download="classification_history.csv">Download CSV</a>'
-            st.markdown(href, unsafe_allow_html=True)
+            try:
+                df = pd.DataFrame(st.session_state.classification_history)
+                csv = df.to_csv(index=False)
+                st.download_button(
+                    label="Download CSV",
+                    data=csv,
+                    file_name="classification_history.csv",
+                    mime="text/csv"
+                )
+            except Exception as e:
+                st.error(f"Export failed: {e}")
     
     # Clear history
     if st.button("🗑️ Clear History"):
@@ -353,12 +348,8 @@ if classify_button:
                 candidate_labels = ["World News", "Sports", "Business", "Science and Technology"]
                 result = news_classifier(text, candidate_labels)
                 
-                # Step 3: Sentiment analysis (if enabled)
-                sentiment_result = None
-                if enable_sentiment and sentiment_classifier:
-                    status_text.text("😊 Analyzing sentiment...")
-                    progress_bar.progress(75)
-                    sentiment_result = sentiment_classifier(text[:512])  # Limit text length
+                # Step 3: Additional processing
+                progress_bar.progress(75)
                 
                 # Step 4: Final processing
                 status_text.text("📊 Generating insights...")
@@ -433,32 +424,8 @@ if classify_button:
                         with col3:
                             st.write(f"**{score:.1%}**")
                 
-                # Sentiment analysis results
-                if enable_sentiment and sentiment_result:
-                    st.markdown("### 😊 Sentiment Analysis")
-                    sentiment_label = sentiment_result[0]['label']
-                    sentiment_score = sentiment_result[0]['score']
-                    
-                    sentiment_mapping = {
-                        'LABEL_0': {'name': 'Negative', 'icon': '😞', 'color': '#FF6B6B'},
-                        'LABEL_1': {'name': 'Neutral', 'icon': '😐', 'color': '#FFA726'},
-                        'LABEL_2': {'name': 'Positive', 'icon': '😊', 'color': '#4ECDC4'}
-                    }
-                    
-                    sentiment_info = sentiment_mapping.get(sentiment_label, {'name': 'Unknown', 'icon': '❓', 'color': '#666'})
-                    
-                    st.markdown(f"""
-                    <div style="
-                        background: {sentiment_info['color']}22;
-                        border: 1px solid {sentiment_info['color']};
-                        padding: 15px;
-                        border-radius: 8px;
-                        text-align: center;
-                    ">
-                        <h4>{sentiment_info['icon']} {sentiment_info['name']} Sentiment</h4>
-                        <p>Confidence: {sentiment_score:.1%}</p>
-                    </div>
-                    """, unsafe_allow_html=True)
+                # Additional info
+                st.info("💡 For sentiment analysis and advanced features, check out the full version!")
                 
                 # Text analytics
                 if enable_analytics:
@@ -476,13 +443,13 @@ if classify_button:
                         st.metric("Key Terms", len(stats['keywords']))
                 
                 # Save to history
+                from datetime import datetime
                 classification_record = {
                     'timestamp': datetime.now().isoformat(),
                     'category': predicted_category,
                     'confidence': confidence,
                     'text_length': len(text),
-                    'word_count': len(text.split()),
-                    'sentiment': sentiment_info['name'] if enable_sentiment and sentiment_result else None
+                    'word_count': len(text.split())
                 }
                 
                 st.session_state.classification_history.append(classification_record)
@@ -559,24 +526,28 @@ with st.expander("ℹ️ About This Application"):
     """)
 
 # Performance metrics (if history exists)
-if st.session_state.classification_history:
+if st.session_state.classification_history and PANDAS_AVAILABLE:
     with st.expander("📈 Performance Metrics"):
-        df = pd.DataFrame(st.session_state.classification_history)
-        
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            avg_confidence = df['confidence'].mean()
-            st.metric("Average Confidence", f"{avg_confidence:.1%}")
-        
-        with col2:
-            avg_word_count = df['word_count'].mean()
-            st.metric("Average Article Length", f"{avg_word_count:.0f} words")
-        
-        with col3:
-            most_common_category = df['category'].mode().iloc[0] if not df.empty else "N/A"
-            st.metric("Most Common Category", most_common_category)
-        
-        # Confidence distribution
-        fig = px.histogram(df, x='confidence', nbins=20, title="Confidence Score Distribution")
-        fig.update_layout(height=300)
-        st.plotly_chart(fig, use_container_width=True)
+        try:
+            df = pd.DataFrame(st.session_state.classification_history)
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                avg_confidence = df['confidence'].mean()
+                st.metric("Average Confidence", f"{avg_confidence:.1%}")
+            
+            with col2:
+                avg_word_count = df['word_count'].mean()
+                st.metric("Average Article Length", f"{avg_word_count:.0f} words")
+            
+            with col3:
+                most_common_category = df['category'].mode().iloc[0] if not df.empty else "N/A"
+                st.metric("Most Common Category", most_common_category)
+            
+            # Confidence distribution
+            if PLOTLY_AVAILABLE:
+                fig = px.histogram(df, x='confidence', nbins=20, title="Confidence Score Distribution")
+                fig.update_layout(height=300)
+                st.plotly_chart(fig, use_container_width=True)
+        except Exception as e:
+            st.write("📊 Basic statistics available after more classifications")
